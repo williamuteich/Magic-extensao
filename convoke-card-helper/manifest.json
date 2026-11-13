@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Convoke Card Helper",
+  "version": "0.4.0",
+  "description": "Tradução em português, explicação das cartas e chat de IA (OpenRouter) no Convoke.games.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://api.scryfall.com/*",
+    "https://translate.googleapis.com/*",
+    "https://openrouter.ai/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Convoke Card Helper – configurações" },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "content_scripts": [
+    {
+      "matches": ["https://convoke.games/*"],
+      "js": ["glossary.js", "content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
