@@ -58,6 +58,11 @@ html.cch-zoom .card-text-pane.overlay { visibility: hidden !important; pointer-e
   pointer-events: auto; cursor: auto; user-select: text;
   scrollbar-width: thin; scrollbar-color: #3a4058 transparent;
 }
+#cch-side .cch-side-close {
+  position: sticky; top: 0; float: right; z-index: 3; margin: -6px -8px 0 10px;
+  font-size: 14px; padding: 4px 10px; cursor: pointer;
+}
+#cch-side .cch-side-close:hover { background: #7f1d1d; border-color: #f87171; }
 #cch-side .cch-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 #cch-side .cch-cost { white-space: nowrap; padding-top: 2px; }
 #cch-side .cch-cost .cch-mana { min-width: 22px; height: 22px; font-size: 12px; }
@@ -172,6 +177,8 @@ html.cch-zoom .card-text-pane.overlay { visibility: hidden !important; pointer-e
   flex: 1; min-width: 0; background: var(--bg3); color: var(--txt); border: 1px solid var(--line);
   border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 13.5px;
 }
+#cch-settings select.cch-in { cursor: pointer; }
+#cch-settings select.cch-in option { background: var(--bg3); color: var(--txt); }
 #cch-settings .cch-check { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13.5px; cursor: pointer; }
 #cch-settings .cch-model-list {
   height: 260px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--bg3);

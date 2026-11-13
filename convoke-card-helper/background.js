@@ -98,12 +98,30 @@ async function load(id) {
   return out;
 }
 
-// ---------------- OpenRouter ----------------
-const OR = "https://openrouter.ai/api/v1";
-const DEFAULTS = { orKey: "", orModel: "", orFreeOnly: true, orAutoExplain: true };
+// ---------------- Provedores de IA (OpenRouter / Groq) ----------------
+// Ambos usam o formato da API da OpenAI. Cada provedor tem sua própria chave e modelo salvos.
+const PROVIDERS = {
+  openrouter: { name: "OpenRouter", base: "https://openrouter.ai/api/v1", keyField: "orKey", modelField: "orModel", cache: "orModels" },
+  groq: { name: "Groq", base: "https://api.groq.com/openai/v1", keyField: "gqKey", modelField: "gqModel", cache: "gqModels" },
+};
+const DEFAULTS = { provider: "openrouter", orKey: "", orModel: "", gqKey: "", gqModel: "", orFreeOnly: true, orAutoExplain: true };
 
 async function settings() {
   return { ...DEFAULTS, ...(await chrome.storage.local.get(Object.keys(DEFAULTS))) };
+}
+
+const prov = (id) => PROVIDERS[id] || PROVIDERS.openrouter;
+
+// Visão das configurações sem expor as chaves.
+function publicSettings(s) {
+  const p = prov(s.provider);
+  return {
+    provider: s.provider in PROVIDERS ? s.provider : "openrouter",
+    providerName: p.name,
+    model: s[p.modelField],
+    hasKey: !!s[p.keyField],
+    freeOnly: s.orFreeOnly,
+  };
 }
 
 function isFree(m) {
@@ -112,31 +130,52 @@ function isFree(m) {
     (Number(p.prompt) === 0 && Number(p.completion) === 0 && Number(p.request || 0) === 0);
 }
 
-async function models(force) {
-  const c = (await chrome.storage.local.get("orModels")).orModels;
-  if (!force && c && Date.now() - c.at < 3600e3) return c.list;
-  const r = await fetch(OR + "/models");
-  if (!r.ok) throw new Error("OpenRouter " + r.status);
-  const j = await r.json();
-  const list = j.data
-    .map((m) => ({
+// Modelos do Groq que não servem para chat (áudio, moderação).
+const GROQ_NON_CHAT = /whisper|tts|guard|orpheus|playai|distil/i;
+
+// keyOverride: chave digitada no formulário (ainda não salva).
+async function models(providerId, force, keyOverride) {
+  const s = await settings();
+  const id = providerId || s.provider;
+  const p = prov(id);
+  const key = keyOverride || s[p.keyField];
+  const c = (await chrome.storage.local.get(p.cache))[p.cache];
+  if (!force && !keyOverride && c && c.list.length && Date.now() - c.at < 3600e3) return c.list;
+
+  let list;
+  if (id === "groq") {
+    if (!key) return []; // a lista do Groq exige chave
+    const r = await fetch(p.base + "/models", { headers: { Authorization: "Bearer " + key } });
+    if (!r.ok) throw new Error("Groq " + r.status + (r.status === 401 ? " (chave inválida)" : ""));
+    const j = await r.json();
+    list = j.data
+      .filter((m) => m.active !== false && !GROQ_NON_CHAT.test(m.id))
+      .map((m) => ({ id: m.id, name: m.id, ctx: m.context_window || 0, free: true, inPrice: 0, outPrice: 0 }));
+  } else {
+    const r = await fetch(p.base + "/models");
+    if (!r.ok) throw new Error("OpenRouter " + r.status);
+    const j = await r.json();
+    list = j.data.map((m) => ({
       id: m.id,
       name: m.name || m.id,
       ctx: m.context_length || 0,
       free: isFree(m),
       inPrice: Number(m.pricing?.prompt || 0) * 1e6, // US$ por 1M tokens
       outPrice: Number(m.pricing?.completion || 0) * 1e6,
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-  await chrome.storage.local.set({ orModels: { at: Date.now(), list } });
+    }));
+  }
+  list.sort((a, b) => a.name.localeCompare(b.name));
+  if (!keyOverride) await chrome.storage.local.set({ [p.cache]: { at: Date.now(), list } });
   return list;
 }
 
-function orError(j, status) {
+function apiError(providerId, j, status) {
+  const name = prov(providerId).name;
   const msg = j?.error?.message || ("HTTP " + status);
-  if (status === 401) return "Chave do OpenRouter inválida. Confira nas configurações.";
-  if (status === 402) return "Sem créditos no OpenRouter para este modelo. Use um modelo gratuito.";
-  if (status === 429) return "Limite de uso atingido (comum em modelos gratuitos). Espere um pouco ou troque de modelo.";
+  if (status === 401) return `Chave do ${name} inválida. Confira nas configurações.`;
+  if (status === 402) return `Sem créditos no ${name} para este modelo. Use um modelo gratuito.`;
+  if (status === 413) return "Mensagem grande demais para o limite deste modelo. Limpe o chat ou troque de modelo.";
+  if (status === 429) return "Limite de uso atingido (comum em planos gratuitos). Espere um pouco ou troque de modelo.";
   return msg;
 }
 
@@ -149,29 +188,36 @@ chrome.runtime.onConnect.addListener((port) => {
     const post = (m) => { try { port.postMessage(m); } catch (_) {} };
     try {
       const s = await settings();
-      if (!s.orKey) return post({ error: "Configure sua chave do OpenRouter nas configurações da extensão." });
-      const useModel = model || s.orModel;
+      const pid = s.provider in PROVIDERS ? s.provider : "openrouter";
+      const p = prov(pid);
+      const key = s[p.keyField];
+      if (!key) return post({ error: `Configure sua chave do ${p.name} nas configurações da extensão.` });
+      const useModel = model || s[p.modelField];
       if (!useModel) return post({ error: "Escolha um modelo nas configurações." });
-      const r = await fetch(OR + "/chat/completions", {
+      const body = { model: useModel, messages, stream: true };
+      const headers = { Authorization: "Bearer " + key, "Content-Type": "application/json" };
+      if (pid === "openrouter") {
+        // reasoning.effort "low": modelos que "pensam" respondem mais rápido e não gastam tudo raciocinando.
+        // Modelos sem suporte simplesmente ignoram. (O Groq rejeita esse campo, por isso só no OpenRouter.)
+        body.reasoning = { effort: "low", exclude: true };
+        headers["X-Title"] = "Convoke Card Helper";
+      }
+      const r = await fetch(p.base + "/chat/completions", {
         method: "POST",
         signal: ctrl.signal,
-        headers: {
-          Authorization: "Bearer " + s.orKey,
-          "Content-Type": "application/json",
-          "X-Title": "Convoke Card Helper",
-        },
-        // reasoning.effort "low": modelos que "pensam" respondem mais rápido e não gastam tudo raciocinando.
-        // Modelos sem suporte simplesmente ignoram.
-        body: JSON.stringify({ model: useModel, messages, stream: true, reasoning: { effort: "low", exclude: true } }),
+        headers,
+        body: JSON.stringify(body),
       });
       if (!r.ok) {
         let j = null; try { j = await r.json(); } catch (_) {}
-        return post({ error: orError(j, r.status) });
+        return post({ error: apiError(pid, j, r.status) });
       }
       const reader = r.body.getReader();
       const dec = new TextDecoder();
       let buf = "";
       let thinking = false;
+      let inThink = false; // dentro de um bloco <think>
+      let sent = false;    // já enviou algum texto visível
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -187,8 +233,27 @@ chrome.runtime.onConnect.addListener((port) => {
             const j = JSON.parse(data);
             if (j.error) return post({ error: j.error.message || "Erro do modelo" });
             const delta = j.choices?.[0]?.delta || {};
-            if (delta.content) post({ delta: delta.content });
-            else if ((delta.reasoning || delta.reasoning_details) && !thinking) { thinking = true; post({ thinking: true }); }
+            let content = delta.content || "";
+            // Alguns modelos (ex.: Qwen3 no Groq) mandam o raciocínio dentro de <think>…</think> no próprio texto.
+            if (content) {
+              let out = "";
+              while (content) {
+                if (inThink) {
+                  const e = content.indexOf("</think>");
+                  if (e < 0) { content = ""; break; }
+                  inThink = false; content = content.slice(e + 8);
+                } else {
+                  const b = content.indexOf("<think>");
+                  if (b < 0) { out += content; break; }
+                  out += content.slice(0, b); inThink = true; content = content.slice(b + 7);
+                  if (!thinking) { thinking = true; post({ thinking: true }); }
+                }
+              }
+              // descarta quebras de linha que sobram logo após o </think>
+              if (!sent) out = out.replace(/^\s+/, "");
+              if (out) { sent = true; post({ delta: out }); }
+            }
+            if (!delta.content && (delta.reasoning || delta.reasoning_details) && !thinking) { thinking = true; post({ thinking: true }); }
           } catch (_) {}
         }
       }
@@ -210,11 +275,19 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 });
 
-async function testKey(key) {
-  const r = await fetch(OR + "/key", { headers: { Authorization: "Bearer " + key } });
+// Testa a chave e devolve um texto pronto para exibir.
+async function testKey(providerId, key) {
+  if (!key) throw new Error("Cole a chave primeiro.");
+  if (providerId === "groq") {
+    const list = await models("groq", true, key);
+    return `Chave válida. ${list.length} modelos de chat disponíveis (plano gratuito com limites por minuto/dia).`;
+  }
+  const r = await fetch(PROVIDERS.openrouter.base + "/key", { headers: { Authorization: "Bearer " + key } });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j?.error?.message || "HTTP " + r.status);
-  return j.data || {};
+  const d = j.data || {};
+  return `Chave válida. Uso: $${(d.usage || 0).toFixed(4)}` +
+    (d.limit != null ? ` de $${d.limit}` : " (sem limite)") + (d.is_free_tier ? " · plano gratuito" : "");
 }
 
 chrome.runtime.onMessage.addListener((msg, _s, send) => {
@@ -224,17 +297,19 @@ chrome.runtime.onMessage.addListener((msg, _s, send) => {
     return true; // resposta assíncrona
   }
   if (msg.type === "models") {
-    Promise.all([models(msg.force), settings()])
-      .then(([list, s]) => send({ ok: true, list, settings: { ...s, orKey: s.orKey ? "set" : "" } }))
-      .catch((e) => send({ ok: false, error: String(e) }));
+    Promise.all([models(msg.provider, msg.force, msg.key), settings()])
+      .then(([list, s]) => send({ ok: true, list, settings: publicSettings(s) }))
+      .catch((e) => send({ ok: false, error: String(e.message || e) }));
     return true;
   }
   if (msg.type === "setModel") {
-    chrome.storage.local.set({ orModel: msg.model }).then(() => send({ ok: true }));
+    settings()
+      .then((s) => chrome.storage.local.set({ [prov(s.provider).modelField]: msg.model }))
+      .then(() => send({ ok: true }));
     return true;
   }
   if (msg.type === "testKey") {
-    testKey(msg.key).then((d) => send({ ok: true, data: d })).catch((e) => send({ ok: false, error: e.message }));
+    testKey(msg.provider, msg.key).then((text) => send({ ok: true, text })).catch((e) => send({ ok: false, error: e.message }));
     return true;
   }
 });

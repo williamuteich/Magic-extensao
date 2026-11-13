@@ -29,13 +29,21 @@
 <body>
 <main>
   <h1>Convoke Card Helper</h1>
-  <div class="sub">Configuração do chat de IA via OpenRouter.</div>
+  <div class="sub">Configuração do chat de IA (OpenRouter ou Groq).</div>
+
+  <section>
+    <h2>Provedor</h2>
+    <select id="provider">
+      <option value="openrouter">OpenRouter (muitos modelos, alguns gratuitos)</option>
+      <option value="groq">Groq (gratuito com limites, muito rápido)</option>
+    </select>
+  </section>
 
   <section>
     <h2>Chave da API (token)</h2>
-    <label for="key">Crie em <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a> e cole aqui. Ela fica salva só neste navegador.</label>
+    <label for="key" id="keyHelp"></label>
     <div class="row">
-      <input id="key" type="password" placeholder="sk-or-v1-..." autocomplete="off">
+      <input id="key" type="password" autocomplete="off">
       <button id="toggle" class="ghost" type="button">Mostrar</button>
       <button id="test" class="ghost" type="button">Testar</button>
     </div>
@@ -46,7 +54,7 @@
     <h2>Modelo</h2>
     <div class="row">
       <input id="search" type="text" placeholder="Buscar modelo (ex.: llama, gemini, deepseek)…">
-      <label style="margin:0"><input id="free" type="checkbox"> Somente gratuitos</label>
+      <label style="margin:0" id="freeRow"><input id="free" type="checkbox"> Somente gratuitos</label>
       <button id="refresh" class="ghost" type="button">Atualizar lista</button>
     </div>
     <select id="model" size="14"></select>

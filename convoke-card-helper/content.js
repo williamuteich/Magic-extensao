@@ -3,7 +3,8 @@
   const SITE_PANE = ".card-text-pane.overlay"; // caixinha de texto (em inglês) que o site mostra no zoom
   const OURS = "#cch-panel, #cch-side, #cch-settings";
 
-  let panel, side, msgsEl, modelSel, inputEl, sendBtn, fab, settingsEl;
+  let panel, side, sideBody, msgsEl, modelSel, inputEl, sendBtn, fab, settingsEl;
+  let dismissed = null;     // { dialog, id } da carta cujos painéis o usuário fechou
   let mode = null;          // null | "card" | "free"
   let freeOpen = false;     // chat geral aberto pelo botão flutuante
   let currentId = null;     // carta exibida (id da impressão no Scryfall)
@@ -71,14 +72,21 @@
   }
 
   // ---------------- Detecção do zoom ----------------
+  // Zoom = diálogo mostrando UMA carta. Diálogos com várias cartas diferentes
+  // (mulligan, escolher cartas, grimório etc.) não contam.
   function findZoom() {
     for (const d of document.querySelectorAll('[role="dialog"]')) {
       if (d.closest(OURS)) continue;
+      let first = null;
+      const ids = new Set();
       for (const img of d.querySelectorAll("img")) {
         if (img.closest(OURS)) continue;
         const m = img.src.match(ID_RE);
-        if (m) return { dialog: d, img, id: m[1] };
+        if (!m) continue;
+        ids.add(m[1]);
+        if (!first) first = { dialog: d, img, id: m[1] };
       }
+      if (first && ids.size <= 2) return first; // 2 = carta de duas faces
     }
     return null;
   }
@@ -115,8 +123,20 @@
     side = document.createElement("div");
     side.id = "cch-side";
     side.className = "cch-root";
+    side.innerHTML = `<button type="button" class="cch-icon cch-side-close" data-act="dismiss" title="Fechar (Esc)">✕</button>
+      <div class="cch-side-body"></div>`;
+    sideBody = side.querySelector(".cch-side-body");
+    side.addEventListener("click", (e) => { if (e.target.closest('[data-act="dismiss"]')) dismiss(); });
     document.body.appendChild(side);
     isolate(side);
+
+    // Esc fecha os painéis da carta (sem fechar o zoom do site)
+    window.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || mode !== "card") return;
+      if (settingsEl && settingsEl.style.display !== "none") return;
+      e.stopImmediatePropagation(); e.preventDefault();
+      dismiss();
+    }, true);
 
     // Painel direito: chat com IA
     panel = document.createElement("div");
@@ -170,7 +190,7 @@
 
     cfgReady = loadModels();
     chrome.storage.onChanged.addListener((c) => {
-      if (c.orModel || c.orKey || c.orFreeOnly || c.orModels) loadModels();
+      if (c.provider || c.orModel || c.orKey || c.orFreeOnly || c.orModels || c.gqKey || c.gqModel || c.gqModels) loadModels();
     });
   }
 
@@ -194,12 +214,14 @@
     }
     cfg = { list: res.list, settings: res.settings };
     const s = res.settings;
-    const shown = res.list.filter((m) => !s.orFreeOnly || m.free || m.id === s.orModel);
+    const shown = res.list.filter((m) => !s.freeOnly || m.free || m.id === s.model);
+    const tag = (m) => (s.provider === "openrouter" && m.free ? " (grátis)" : "");
     modelSel.innerHTML =
-      (s.orModel ? "" : `<option value="">— escolha um modelo —</option>`) +
-      shown.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}${m.free ? " (grátis)" : ""}</option>`).join("");
-    modelSel.value = s.orModel || "";
-    panel.dataset.nokey = s.orKey ? "" : "1";
+      (s.model ? "" : `<option value="">— escolha um modelo —</option>`) +
+      shown.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}${tag(m)}</option>`).join("");
+    modelSel.value = s.model || "";
+    modelSel.title = "Modelo do " + s.providerName;
+    panel.dataset.nokey = s.hasKey ? "" : "1";
     renderMsgs();
   }
 
@@ -278,13 +300,13 @@
     placeChat(rect);
     if (mode === "card" && z.id === currentId) return;
     mode = "card"; currentId = z.id; currentData = null;
-    side.innerHTML = '<div class="cch-sub">Carregando…</div>';
+    sideBody.innerHTML = '<div class="cch-sub">Carregando…</div>';
     switchChat("card:" + z.id);
     const id = z.id;
     chrome.runtime.sendMessage({ type: "card", id }, (res) => {
       if (currentId !== id) return;
       if (!res || !res.ok) {
-        side.innerHTML = '<div class="cch-sub">Não foi possível carregar esta carta.</div>';
+        sideBody.innerHTML = '<div class="cch-sub">Não foi possível carregar esta carta.</div>';
         return;
       }
       currentData = res.data;
@@ -321,8 +343,14 @@
       ? `<h4>Esclarecimentos oficiais</h4><div class="cch-kws">` +
         data.rulingsPt.map((r) => `<div class="cch-kw cch-ruling">${symbolsHtml(r)}</div>`).join("") + `</div>`
       : "";
-    side.innerHTML = faces + rul;
+    sideBody.innerHTML = faces + rul;
     side.scrollTop = 0;
+  }
+
+  // Fecha os painéis desta carta. Voltam ao abrir outra carta ou ao reabrir o zoom.
+  function dismiss() {
+    if (zoom) dismissed = { dialog: zoom.dialog, id: zoom.id };
+    hide();
   }
 
   // ---------------- Chat ----------------
@@ -363,7 +391,7 @@
     if (!panel) return;
     const h = histories.get(chatKey) || [];
     if (panel.dataset.nokey) {
-      msgsEl.innerHTML = `<div class="cch-note">Para usar o chat, configure sua chave do OpenRouter.
+      msgsEl.innerHTML = `<div class="cch-note">Para usar o chat, configure sua chave do ${esc(cfg.settings.providerName || "provedor de IA")}.
         <button type="button" data-act="settings" class="cch-link">Abrir configurações</button></div>`;
     } else if (!h.length) {
       msgsEl.innerHTML = `<div class="cch-empty"><div class="cch-empty-ico">💬</div>
@@ -456,10 +484,18 @@
           <button class="cch-icon" data-s="close" title="Fechar">✕</button>
         </div>
         <div class="cch-modal-body">
-          <h4>Chave do OpenRouter</h4>
-          <div class="cch-sub">Crie em <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>. Fica salva só neste navegador.</div>
+          <h4>Provedor</h4>
           <div class="cch-row">
-            <input class="cch-in" data-f="key" type="password" placeholder="sk-or-v1-..." autocomplete="off" spellcheck="false">
+            <select class="cch-in" data-f="provider">
+              <option value="openrouter">OpenRouter (muitos modelos, alguns gratuitos)</option>
+              <option value="groq">Groq (gratuito com limites, muito rápido)</option>
+            </select>
+          </div>
+
+          <h4 data-f="keyTitle">Chave</h4>
+          <div class="cch-sub" data-f="keyHelp"></div>
+          <div class="cch-row">
+            <input class="cch-in" data-f="key" type="password" autocomplete="off" spellcheck="false">
             <button class="cch-icon" data-s="toggle">Mostrar</button>
             <button class="cch-icon" data-s="test">Testar</button>
           </div>
@@ -470,7 +506,7 @@
             <input class="cch-in" data-f="search" type="text" placeholder="Buscar (llama, gemini, deepseek…)">
             <button class="cch-icon" data-s="refresh" title="Atualizar lista">↻</button>
           </div>
-          <label class="cch-check"><input type="checkbox" data-f="free"> Mostrar somente modelos gratuitos</label>
+          <label class="cch-check" data-f="freeRow"><input type="checkbox" data-f="free"> Mostrar somente modelos gratuitos</label>
           <div class="cch-model-list" data-f="list"></div>
           <div class="cch-sub" data-f="listMsg"></div>
         </div>
@@ -484,7 +520,7 @@
     settingsEl.addEventListener("click", async (e) => {
       if (e.target === settingsEl) return closeSettings();
       const row = e.target.closest("[data-id]");
-      if (row) { settingsEl.dataset.model = row.dataset.id; renderModelList(); return; }
+      if (row) { st.models[st.provider] = row.dataset.id; renderModelList(); return; }
       const a = e.target.closest("[data-s]")?.dataset.s;
       if (a === "close") closeSettings();
       if (a === "toggle") {
@@ -493,52 +529,111 @@
       }
       if (a === "test") {
         const m = f("keyMsg"); m.className = "cch-sub"; m.textContent = "Testando…";
-        const r = await chrome.runtime.sendMessage({ type: "testKey", key: f("key").value.trim() });
+        const r = await chrome.runtime.sendMessage({ type: "testKey", provider: st.provider, key: f("key").value.trim() });
         if (r.ok) {
-          const d = r.data;
-          m.className = "cch-sub cch-ok";
-          m.textContent = `Chave válida. Uso: $${(d.usage || 0).toFixed(4)}` +
-            (d.limit != null ? ` de $${d.limit}` : " (sem limite)") + (d.is_free_tier ? " · plano gratuito" : "");
+          m.className = "cch-sub cch-ok"; m.textContent = r.text;
+          if (st.provider === "groq") fetchList(true); // agora dá para listar os modelos
         } else { m.className = "cch-sub cch-err"; m.textContent = "Falhou: " + r.error; }
       }
-      if (a === "refresh") {
-        f("listMsg").textContent = "Atualizando…";
-        const r = await chrome.runtime.sendMessage({ type: "models", force: true });
-        if (r.ok) cfg.list = r.list;
-        renderModelList();
-      }
+      if (a === "refresh") fetchList(true);
       if (a === "save") {
+        st.keys[st.provider] = f("key").value.trim();
         await chrome.storage.local.set({
-          orKey: f("key").value.trim(),
-          orModel: settingsEl.dataset.model || "",
+          provider: st.provider,
+          orKey: st.keys.openrouter,
+          orModel: st.models.openrouter || "",
+          gqKey: st.keys.groq,
+          gqModel: st.models.groq || "",
           orFreeOnly: f("free").checked,
         });
         f("saveMsg").className = "cch-sub cch-ok"; f("saveMsg").textContent = "Salvo!";
         setTimeout(closeSettings, 600);
       }
     });
+    f("provider").addEventListener("change", (e) => {
+      st.keys[st.provider] = f("key").value.trim(); // guarda o que foi digitado antes de trocar
+      st.provider = e.target.value;
+      showProvider();
+    });
     f("search").addEventListener("input", renderModelList);
     f("free").addEventListener("change", renderModelList);
   }
 
+  // Estado do modal (não salvo até clicar em "Salvar").
+  const st = { provider: "openrouter", keys: {}, models: {}, lists: {} };
+  const PROV_UI = {
+    openrouter: {
+      title: "Chave do OpenRouter",
+      help: `Crie em <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>. Fica salva só neste navegador.`,
+      placeholder: "sk-or-v1-...",
+      search: "Buscar (llama, gemini, deepseek…)",
+    },
+    groq: {
+      title: "Chave do Groq",
+      help: `Crie grátis em <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>. Fica salva só neste navegador. Plano gratuito tem limite por minuto/dia.`,
+      placeholder: "gsk_...",
+      search: "Buscar (llama, qwen, gpt-oss…)",
+    },
+  };
+
   async function fillSettings() {
-    const s = await chrome.storage.local.get({ orKey: "", orModel: "", orFreeOnly: true });
+    const s = await chrome.storage.local.get({ provider: "openrouter", orKey: "", orModel: "", gqKey: "", gqModel: "", orFreeOnly: true });
     const f = (n) => settingsEl.querySelector(`[data-f="${n}"]`);
-    f("key").value = s.orKey;
+    st.provider = PROV_UI[s.provider] ? s.provider : "openrouter";
+    st.keys = { openrouter: s.orKey, groq: s.gqKey };
+    st.models = { openrouter: s.orModel, groq: s.gqModel };
+    st.lists = {};
     f("free").checked = s.orFreeOnly;
-    f("keyMsg").textContent = ""; f("saveMsg").textContent = "";
-    settingsEl.dataset.model = s.orModel;
+    f("saveMsg").textContent = "";
     await cfgReady;
+    if (cfg.settings.provider === st.provider) st.lists[st.provider] = cfg.list;
+    showProvider();
+  }
+
+  function showProvider() {
+    const f = (n) => settingsEl.querySelector(`[data-f="${n}"]`);
+    const ui = PROV_UI[st.provider];
+    f("provider").value = st.provider;
+    f("keyTitle").textContent = ui.title;
+    f("keyHelp").innerHTML = ui.help;
+    f("key").placeholder = ui.placeholder;
+    f("key").value = st.keys[st.provider] || "";
+    f("search").placeholder = ui.search;
+    f("freeRow").style.display = st.provider === "groq" ? "none" : "";
+    f("keyMsg").textContent = "";
+    if (st.lists[st.provider]) renderModelList(); else fetchList(false);
+    (f("key").value ? f("search") : f("key")).focus();
+  }
+
+  async function fetchList(force) {
+    const f = (n) => settingsEl.querySelector(`[data-f="${n}"]`);
+    const pid = st.provider;
+    const key = f("key").value.trim();
+    if (pid === "groq" && !key) {
+      st.lists.groq = [];
+      f("listMsg").textContent = "";
+      f("list").innerHTML = `<div class="cch-note">Cole sua chave do Groq e clique em "Testar" para ver os modelos.</div>`;
+      return;
+    }
+    f("listMsg").textContent = "Carregando modelos…";
+    const r = await chrome.runtime.sendMessage({ type: "models", provider: pid, force, key: pid === "groq" ? key : undefined });
+    if (pid !== st.provider) return; // usuário trocou de provedor enquanto carregava
+    if (!r || !r.ok) {
+      f("list").innerHTML = "";
+      f("listMsg").textContent = "Erro ao carregar: " + (r?.error || "sem resposta");
+      return;
+    }
+    st.lists[pid] = r.list;
     renderModelList();
-    (s.orKey ? f("search") : f("key")).focus();
   }
 
   function renderModelList() {
     const f = (n) => settingsEl.querySelector(`[data-f="${n}"]`);
+    const all = st.lists[st.provider] || [];
     const q = f("search").value.trim().toLowerCase();
-    const freeOnly = f("free").checked;
-    const chosen = settingsEl.dataset.model;
-    const list = cfg.list.filter((m) =>
+    const freeOnly = st.provider === "openrouter" && f("free").checked;
+    const chosen = st.models[st.provider];
+    const list = all.filter((m) =>
       (!freeOnly || m.free) && (!q || m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)));
     const price = (m) => m.free ? `<span class="cch-badge cch-free">grátis</span>`
       : `<span class="cch-badge">$${m.inPrice.toFixed(2)} / $${m.outPrice.toFixed(2)} por 1M</span>`;
@@ -548,7 +643,7 @@
         <div><div class="cch-model-name">${esc(m.name)}</div><div class="cch-model-id">${esc(m.id)} · ${ctx(m.ctx)}</div></div>
         ${price(m)}
       </div>`).join("") || `<div class="cch-note">Nenhum modelo encontrado.</div>`;
-    f("listMsg").textContent = `${list.length} de ${cfg.list.length} modelos.` +
+    f("listMsg").textContent = `${list.length} de ${all.length} modelos.` +
       (chosen ? ` Selecionado: ${chosen}` : " Clique em um modelo para selecionar.");
     f("list").querySelector(".cch-sel")?.scrollIntoView({ block: "nearest" });
   }
@@ -562,7 +657,9 @@
   const check = () => {
     raf = 0;
     if (!panel) build();
-    const z = findZoom();
+    let z = findZoom();
+    if (z && dismissed && z.dialog === dismissed.dialog && z.id === dismissed.id) z = null; // usuário fechou
+    else dismissed = null; // zoom fechado ou outra carta: painéis voltam a aparecer
     if (z) showCard(z);
     else if (mode === "card") {
       delete panel.dataset.closed;
