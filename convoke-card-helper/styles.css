@@ -85,10 +85,12 @@ html.cch-zoom .card-text-pane.overlay { visibility: hidden !important; pointer-e
 #cch-side .cch-orig { color: var(--mut); font-style: italic; font-size: 13px; margin-top: 6px; }
 #cch-side details { margin-top: 8px; }
 #cch-side summary { cursor: pointer; color: var(--acc); font-size: 12.5px; }
-#cch-side .cch-kws { display: flex; flex-direction: column; gap: 6px; }
-#cch-side .cch-kw { background: var(--bg3); border: 1px solid #1f2435; border-radius: 8px; padding: 8px 11px; }
-#cch-side .cch-kw b { display: block; color: #fff; font-size: 13px; margin-bottom: 2px; }
-#cch-side .cch-kw span, #cch-side .cch-ruling { color: #c8ccd9; font-size: 13px; }
+#cch-side .cch-kws { display: flex; flex-direction: column; gap: 5px; }
+#cch-side .cch-kw { color: #c8ccd9; font-size: 12.5px; line-height: 1.4; }
+#cch-side .cch-kw b { color: #fff; font-weight: 600; }
+#cch-side .cch-rulings { margin-top: 14px; }
+#cch-side .cch-rulings .cch-kws { margin-top: 8px; }
+#cch-side .cch-ruling { padding-left: 10px; border-left: 2px solid var(--line); }
 #cch-side .cch-face + .cch-face { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
 
 /* ---------- Painel direito: chat ---------- */

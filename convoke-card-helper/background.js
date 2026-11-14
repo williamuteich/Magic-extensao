@@ -194,7 +194,7 @@ chrome.runtime.onConnect.addListener((port) => {
       if (!key) return post({ error: `Configure sua chave do ${p.name} nas configurações da extensão.` });
       const useModel = model || s[p.modelField];
       if (!useModel) return post({ error: "Escolha um modelo nas configurações." });
-      const body = { model: useModel, messages, stream: true };
+      const body = { model: useModel, messages, stream: true, temperature: 0.3 };
       const headers = { Authorization: "Bearer " + key, "Content-Type": "application/json" };
       if (pid === "openrouter") {
         // reasoning.effort "low": modelos que "pensam" respondem mais rápido e não gastam tudo raciocinando.

@@ -334,14 +334,14 @@
             <div class="cch-tag">${f.text_pt_official ? "✓ Texto oficial em português" : "Tradução automática"}</div>
           </div>
           <details><summary>Texto original (inglês)</summary><div class="cch-text cch-orig">${symbolsHtml(f.oracle_text)}</div></details>
-          ${kws.length ? `<h4>Termos e regras desta carta</h4><div class="cch-kws">` +
-            kws.map(([n, d]) => `<div class="cch-kw"><b>${esc(n)}</b><span>${symbolsHtml(d)}</span></div>`).join("") + `</div>` : ""}
+          ${kws.length ? `<h4>O que significa</h4><div class="cch-kws">` +
+            kws.map(([n, d]) => `<div class="cch-kw"><b>${esc(n)}:</b> ${symbolsHtml(d)}</div>`).join("") + `</div>` : ""}
         </div>`;
       })
       .join("");
     const rul = data.rulingsPt.length
-      ? `<h4>Esclarecimentos oficiais</h4><div class="cch-kws">` +
-        data.rulingsPt.map((r) => `<div class="cch-kw cch-ruling">${symbolsHtml(r)}</div>`).join("") + `</div>`
+      ? `<details class="cch-rulings"><summary>Esclarecimentos oficiais (${data.rulingsPt.length})</summary><div class="cch-kws">` +
+        data.rulingsPt.map((r) => `<div class="cch-kw cch-ruling">${symbolsHtml(r)}</div>`).join("") + `</div></details>`
       : "";
     sideBody.innerHTML = faces + rul;
     side.scrollTop = 0;
@@ -410,10 +410,14 @@
 
   function systemPrompt(data) {
     let p =
-      "Você é um juiz e especialista em Magic: The Gathering ajudando um jogador durante uma partida online de Commander (EDH). " +
-      "Responda SEMPRE em português do Brasil, de forma clara, didática e objetiva (prefira respostas curtas, com exemplos práticos). " +
-      "Ao citar cartas ou termos, use o nome em português e o original em inglês entre parênteses. " +
-      "Baseie-se nas regras oficiais (Comprehensive Rules) e, se não tiver certeza, diga isso em vez de inventar.";
+      "Você é um juiz de Magic: The Gathering ajudando um jogador INICIANTE durante uma partida de Commander (EDH). " +
+      "Responda em português do Brasil.\n" +
+      "Regras de resposta:\n" +
+      "- Seja CURTO: no máximo 3 a 5 frases ou tópicos curtos. Só se estenda se o jogador pedir mais detalhes.\n" +
+      "- Vá direto ao ponto: sem introdução, sem repetir a pergunta, sem copiar o texto da carta, sem resumo no final.\n" +
+      "- Linguagem simples, como se explicasse para quem nunca jogou. Evite jargão; se usar um termo, explique em poucas palavras.\n" +
+      "- Seja preciso: baseie-se APENAS no texto oficial (Oracle) e nos rulings fornecidos e nas Comprehensive Rules. " +
+      "Não invente efeitos, combos ou cartas. Se não tiver certeza, diga \"não tenho certeza\" em vez de chutar.";
     if (data) {
       const faces = data.faces.map((f) =>
         `Nome: ${f.name} (PT: ${f.name_pt})\nCusto: ${f.mana_cost || "-"}\nTipo: ${f.type_line}\n` +
