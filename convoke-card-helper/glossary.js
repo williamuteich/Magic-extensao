@@ -1,7 +1,4 @@
-// Glossário: [regex (string, case-insensitive), nome PT, explicação, escopo?]
-// escopo "type" = só procura na linha de tipo; padrão = texto da carta.
 window.MTG_GLOSSARY = [
-  // ---------- Tipos de carta ----------
   ["\\blegendary\\b", "Lendária", "Você só pode ter uma permanente lendária com o mesmo nome. Se tiver duas, escolhe uma e a outra vai para o cemitério.", "type"],
   ["\\bcreature\\b", "Criatura", "Pode atacar e bloquear. No turno em que entra não pode atacar nem usar habilidades com {T} (\"enjoo de invocação\"), a menos que tenha Velocidade.", "type"],
   ["\\binstant\\b", "Instantâneo", "Mágica que pode ser conjurada a qualquer momento, até no turno do oponente ou em resposta a outra mágica. Depois de resolver, vai para o cemitério.", "type"],
@@ -16,7 +13,6 @@ window.MTG_GLOSSARY = [
   ["\\bsaga\\b", "Saga", "Entra com 1 marcador de conhecimento e ganha mais um a cada fase principal sua, ativando o capítulo correspondente. Após o último capítulo, é sacrificada.", "type"],
   ["\\bbattle\\b", "Batalha", "Permanente que os jogadores atacam para derrotar. Quando perde todos os marcadores de defesa, é exilada e você conjura o verso dela.", "type"],
 
-  // ---------- Estrutura das habilidades ----------
   ["\\bwhen(ever)?\\b[^.]*\\benters\\b", "Habilidade ao entrar (ETB)", "Dispara quando esta permanente entra no campo de batalha. Ela vai para a pilha (os oponentes podem responder) e é avaliada quando resolve — por exemplo, contagens como \"número de X que você controla\" são calculadas na resolução."],
   ["\\bwhenever\\b", "\"Sempre que\" (habilidade desencadeada)", "Dispara toda vez que o evento acontece, quantas vezes ele ocorrer. Usa a pilha e pode ser respondida."],
   ["\\bat the beginning of (your|each|the next)[^.]*upkeep", "Início da manutenção", "Dispara no começo do turno (após desvirar e antes de comprar)."],
@@ -55,7 +51,6 @@ window.MTG_GLOSSARY = [
   ["\\btaps?\\b", "Virar (tap)", "Girar a permanente de lado. Criaturas viradas não podem bloquear. Desvira no seu próximo passo de desvirar."],
   ["\\buntaps?\\b", "Desvirar", "Voltar a permanente à posição normal, pronta para usar de novo."],
 
-  // ---------- Palavras-chave de evergreen ----------
   ["\\bflying\\b", "Voar", "Só pode ser bloqueada por criaturas com Voar ou Alcance."],
   ["\\bfirst strike\\b", "Ataque Inicial", "Causa dano de combate antes das criaturas sem Ataque Inicial — muitas vezes mata o oponente antes de levar dano."],
   ["\\bdouble strike\\b", "Ataque Duplo", "Causa dano duas vezes no combate: com o Ataque Inicial e de novo no dano normal."],
@@ -75,7 +70,6 @@ window.MTG_GLOSSARY = [
   ["\\bward\\b", "Custódia (Ward)", "Quando um oponente mira nela, ele precisa pagar o custo indicado ou a mágica/habilidade é anulada."],
   ["\\bcan't be blocked\\b", "Não pode ser bloqueada", "Ninguém pode bloqueá-la (nas condições descritas)."],
 
-  // ---------- Mecânicas comuns ----------
   ["\\bscry\\b", "Vidência (Scry)", "Olhe as N cartas do topo; coloque qualquer número no fundo e o resto no topo na ordem que quiser."],
   ["\\bsurveil\\b", "Vigiar (Surveil)", "Olhe as N cartas do topo; cada uma vai para o cemitério ou volta ao topo."],
   ["\\bmill", "Moer (Mill)", "Coloca as N cartas do topo do grimório no cemitério."],

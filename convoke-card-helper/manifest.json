@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Convoke Card Helper",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Tradução em português, explicação das cartas e chat de IA (OpenRouter ou Groq) no Convoke.games.",
   "permissions": ["storage"],
   "host_permissions": [
@@ -16,7 +16,7 @@
   "content_scripts": [
     {
       "matches": ["https://convoke.games/*"],
-      "js": ["glossary.js", "content.js"],
+      "js": ["glossary.js", "content.js", "table.js"],
       "css": ["styles.css"],
       "run_at": "document_idle"
     }

@@ -1,4 +1,3 @@
-// Service worker: busca dados no Scryfall e traduz. Resultados ficam em cache.
 const SF = "https://api.scryfall.com";
 const HEADERS = { Accept: "application/json", "User-Agent": "ConvokeCardHelper/0.1" };
 
@@ -48,7 +47,6 @@ async function load(id) {
   const card = await sf("/cards/" + id);
   const fs = faces(card);
 
-  // Versão impressa em português (se existir alguma edição em PT)
   let ptFaces = null;
   try {
     const res = await sf(
@@ -62,14 +60,12 @@ async function load(id) {
     }
   } catch (_) {}
 
-  // Rulings (esclarecimentos oficiais)
   let rulings = [];
   try {
     const r = await sf(`/cards/${id}/rulings`);
     rulings = r.data.map((x) => x.comment).slice(-6);
   } catch (_) {}
 
-  // Tradução automática (usada quando não há texto impresso em PT)
   const out = { oracleId: card.oracle_id, faces: [], rulings: [], rulingsPt: [] };
   for (let i = 0; i < fs.length; i++) {
     const f = fs[i];
@@ -98,8 +94,51 @@ async function load(id) {
   return out;
 }
 
-// ---------------- Provedores de IA (OpenRouter / Groq) ----------------
-// Ambos usam o formato da API da OpenAI. Cada provedor tem sua própria chave e modelo salvos.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function brief(c) {
+  const iu = c.image_uris || c.card_faces?.[0]?.image_uris || {};
+  return {
+    id: c.id,
+    oracleId: c.oracle_id || c.card_faces?.[0]?.oracle_id,
+    name: c.printed_name || c.card_faces?.map((f) => f.printed_name || f.name).join(" // ") || c.name,
+    en: c.name,
+    lang: c.lang,
+    set: (c.set || "").toUpperCase(),
+    num: c.collector_number || "",
+    img: iu.normal || iu.large || "",
+    small: iu.small || iu.normal || "",
+    type: c.printed_type_line || c.type_line || c.card_faces?.[0]?.type_line || "",
+    pt: c.power != null ? `${c.power}/${c.toughness}` : c.card_faces?.[0]?.power != null
+      ? `${c.card_faces[0].power}/${c.card_faces[0].toughness}` : "",
+  };
+}
+
+async function searchCards(q, tokens) {
+  q = (q || "").trim();
+  if (UUID_RE.test(q)) return [brief(await sf("/cards/" + q))];
+  const m = !tokens && q.match(/^([a-z0-9]{2,6})\s*[\s#/-]\s*(\d+[a-z★]?)$/i);
+  if (m) {
+    try { return [brief(await sf(`/cards/${m[1].toLowerCase()}/${encodeURIComponent(m[2])}`))]; } catch (_) {}
+  }
+  const extra = tokens ? "&include_extras=true" : "";
+  const order = tokens ? "name" : "edhrec";
+  const run = (query) =>
+    sf(`/cards/search?q=${encodeURIComponent(query)}&unique=cards&order=${order}${extra}`).then((r) => r.data).catch(() => []);
+  const base = tokens ? q + " t:token" : q;
+  const [en, pt] = await Promise.all([run(base), run(base + " lang:pt")]);
+  const seen = new Set();
+  const out = [];
+  for (const c of [...en, ...pt]) {
+    const b = brief(c);
+    if (!b.img || seen.has(b.oracleId)) continue;
+    seen.add(b.oracleId);
+    out.push(b);
+    if (out.length >= (tokens ? 30 : 18)) break;
+  }
+  return out;
+}
+
 const PROVIDERS = {
   openrouter: { name: "OpenRouter", base: "https://openrouter.ai/api/v1", keyField: "orKey", modelField: "orModel", cache: "orModels" },
   groq: { name: "Groq", base: "https://api.groq.com/openai/v1", keyField: "gqKey", modelField: "gqModel", cache: "gqModels" },
@@ -112,7 +151,6 @@ async function settings() {
 
 const prov = (id) => PROVIDERS[id] || PROVIDERS.openrouter;
 
-// Visão das configurações sem expor as chaves.
 function publicSettings(s) {
   const p = prov(s.provider);
   return {
@@ -130,10 +168,8 @@ function isFree(m) {
     (Number(p.prompt) === 0 && Number(p.completion) === 0 && Number(p.request || 0) === 0);
 }
 
-// Modelos do Groq que não servem para chat (áudio, moderação).
 const GROQ_NON_CHAT = /whisper|tts|guard|orpheus|playai|distil/i;
 
-// keyOverride: chave digitada no formulário (ainda não salva).
 async function models(providerId, force, keyOverride) {
   const s = await settings();
   const id = providerId || s.provider;
@@ -144,7 +180,7 @@ async function models(providerId, force, keyOverride) {
 
   let list;
   if (id === "groq") {
-    if (!key) return []; // a lista do Groq exige chave
+    if (!key) return [];
     const r = await fetch(p.base + "/models", { headers: { Authorization: "Bearer " + key } });
     if (!r.ok) throw new Error("Groq " + r.status + (r.status === 401 ? " (chave inválida)" : ""));
     const j = await r.json();
@@ -160,7 +196,7 @@ async function models(providerId, force, keyOverride) {
       name: m.name || m.id,
       ctx: m.context_length || 0,
       free: isFree(m),
-      inPrice: Number(m.pricing?.prompt || 0) * 1e6, // US$ por 1M tokens
+      inPrice: Number(m.pricing?.prompt || 0) * 1e6,
       outPrice: Number(m.pricing?.completion || 0) * 1e6,
     }));
   }
@@ -179,7 +215,6 @@ function apiError(providerId, j, status) {
   return msg;
 }
 
-// Chat com streaming via Port
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "chat") return;
   const ctrl = new AbortController();
@@ -197,8 +232,6 @@ chrome.runtime.onConnect.addListener((port) => {
       const body = { model: useModel, messages, stream: true, temperature: 0.3 };
       const headers = { Authorization: "Bearer " + key, "Content-Type": "application/json" };
       if (pid === "openrouter") {
-        // reasoning.effort "low": modelos que "pensam" respondem mais rápido e não gastam tudo raciocinando.
-        // Modelos sem suporte simplesmente ignoram. (O Groq rejeita esse campo, por isso só no OpenRouter.)
         body.reasoning = { effort: "low", exclude: true };
         headers["X-Title"] = "Convoke Card Helper";
       }
@@ -216,8 +249,8 @@ chrome.runtime.onConnect.addListener((port) => {
       const dec = new TextDecoder();
       let buf = "";
       let thinking = false;
-      let inThink = false; // dentro de um bloco <think>
-      let sent = false;    // já enviou algum texto visível
+      let inThink = false;
+      let sent = false;
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -226,7 +259,7 @@ chrome.runtime.onConnect.addListener((port) => {
         while ((i = buf.indexOf("\n")) >= 0) {
           const line = buf.slice(0, i).trim();
           buf = buf.slice(i + 1);
-          if (!line.startsWith("data:")) continue; // ignora comentários ": OPENROUTER PROCESSING"
+          if (!line.startsWith("data:")) continue;
           const data = line.slice(5).trim();
           if (data === "[DONE]") return post({ done: true });
           try {
@@ -234,7 +267,6 @@ chrome.runtime.onConnect.addListener((port) => {
             if (j.error) return post({ error: j.error.message || "Erro do modelo" });
             const delta = j.choices?.[0]?.delta || {};
             let content = delta.content || "";
-            // Alguns modelos (ex.: Qwen3 no Groq) mandam o raciocínio dentro de <think>…</think> no próprio texto.
             if (content) {
               let out = "";
               while (content) {
@@ -249,7 +281,6 @@ chrome.runtime.onConnect.addListener((port) => {
                   if (!thinking) { thinking = true; post({ thinking: true }); }
                 }
               }
-              // descarta quebras de linha que sobram logo após o </think>
               if (!sent) out = out.replace(/^\s+/, "");
               if (out) { sent = true; post({ delta: out }); }
             }
@@ -264,8 +295,6 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
-// Clique no ícone: abre o modal de configurações dentro da página do Convoke.
-// Em outros sites, cai na página de opções.
 chrome.action.onClicked.addListener(async (tab) => {
   try {
     if (!tab.url || !tab.url.startsWith("https://convoke.games/")) throw 0;
@@ -275,7 +304,6 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 });
 
-// Testa a chave e devolve um texto pronto para exibir.
 async function testKey(providerId, key) {
   if (!key) throw new Error("Cole a chave primeiro.");
   if (providerId === "groq") {
@@ -294,7 +322,19 @@ chrome.runtime.onMessage.addListener((msg, _s, send) => {
   if (!msg) return;
   if (msg.type === "card") {
     load(msg.id).then((d) => send({ ok: true, data: d })).catch((e) => send({ ok: false, error: String(e) }));
-    return true; // resposta assíncrona
+    return true;
+  }
+  if (msg.type === "named") {
+    const q = encodeURIComponent(msg.name || "");
+    sf("/cards/named?exact=" + q)
+      .catch(() => sf("/cards/named?fuzzy=" + q))
+      .then((c) => send({ ok: true, card: brief(c) }))
+      .catch((e) => send({ ok: false, error: String(e.message || e) }));
+    return true;
+  }
+  if (msg.type === "search") {
+    searchCards(msg.q, msg.tokens).then((list) => send({ ok: true, list })).catch((e) => send({ ok: false, error: String(e.message || e) }));
+    return true;
   }
   if (msg.type === "models") {
     Promise.all([models(msg.provider, msg.force, msg.key), settings()])

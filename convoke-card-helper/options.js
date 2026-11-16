@@ -1,6 +1,5 @@
 const $ = (id) => document.getElementById(id);
 
-// Estado da página (não salvo até clicar em "Salvar").
 const st = { provider: "openrouter", keys: {}, models: {}, lists: {} };
 
 const UI = {
@@ -50,7 +49,7 @@ async function loadModels(force) {
   }
   $("modelMsg").textContent = "Carregando modelos…";
   const res = await chrome.runtime.sendMessage({ type: "models", provider: pid, force, key: pid === "groq" ? key : undefined });
-  if (pid !== st.provider) return; // trocou de provedor enquanto carregava
+  if (pid !== st.provider) return;
   if (!res || !res.ok) { $("modelMsg").textContent = "Erro ao carregar: " + (res?.error || "sem resposta"); return; }
   st.lists[pid] = res.list;
   renderList();
@@ -79,7 +78,7 @@ async function init() {
 }
 
 $("provider").addEventListener("change", (e) => {
-  st.keys[st.provider] = $("key").value.trim(); // guarda o que foi digitado antes de trocar
+  st.keys[st.provider] = $("key").value.trim();
   st.provider = e.target.value;
   showProvider();
 });

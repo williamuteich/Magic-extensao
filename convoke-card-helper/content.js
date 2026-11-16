@@ -1,25 +1,24 @@
 (() => {
   const ID_RE = /card-images\/cards\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/;
-  const SITE_PANE = ".card-text-pane.overlay"; // caixinha de texto (em inglês) que o site mostra no zoom
-  const OURS = "#cch-panel, #cch-side, #cch-settings";
+  const SITE_PANE = ".card-text-pane.overlay";
+  const OURS = "#cch-panel, #cch-side, #cch-settings, .cch-tbl";
 
   let panel, side, sideBody, msgsEl, modelSel, inputEl, sendBtn, fab, settingsEl;
-  let dismissed = null;     // { dialog, id } da carta cujos painéis o usuário fechou
-  let mode = null;          // null | "card" | "free"
-  let freeOpen = false;     // chat geral aberto pelo botão flutuante
-  let currentId = null;     // carta exibida (id da impressão no Scryfall)
-  let currentData = null;   // dados da carta exibida
-  let zoom = null;          // { dialog, img } do zoom atual
+  let dismissed = null;
+  let mode = null;
+  let freeOpen = false;
+  let currentId = null;
+  let currentData = null;
+  let zoom = null;
   let chatKey = "free";
   let busy = false;
-  const histories = new Map(); // chatKey -> [{role, content, error?}]
+  const histories = new Map();
   let cfg = { list: [], settings: {} };
   let cfgReady;
 
   const esc = (s) =>
     String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-  // Markdown simples: **negrito**, *itálico*, `código`, títulos, listas e quebras de linha
   function md(text) {
     return esc(text)
       .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
@@ -30,7 +29,6 @@
       .replace(/\n/g, "<br>");
   }
 
-  // ---------------- Mana ----------------
   const COLOR_PT = { W: "branca", U: "azul", B: "preta", R: "vermelha", G: "verde", C: "incolor" };
   function symbolsHtml(text) {
     return esc(text || "").replace(/\{([^}]+)\}/g, (_, s) => {
@@ -57,7 +55,6 @@
     return `Você paga ${parts.join(" + ")}. Valor de mana: ${total}${x ? " + X" : ""}.`;
   }
 
-  // ---------------- Glossário (sem IA) ----------------
   function keywordsFor(face) {
     const seen = new Set();
     const out = [];
@@ -71,12 +68,11 @@
     return out;
   }
 
-  // ---------------- Detecção do zoom ----------------
-  // Zoom = diálogo mostrando UMA carta. Diálogos com várias cartas diferentes
-  // (mulligan, escolher cartas, grimório etc.) não contam.
   function findZoom() {
     for (const d of document.querySelectorAll('[role="dialog"]')) {
       if (d.closest(OURS)) continue;
+      const viewer = d.querySelector('[aria-label*="visualização da carta" i], [aria-label*="Ações da carta" i], [aria-label*="card view" i], [aria-label*="card actions" i]');
+      if (!viewer && [...d.querySelectorAll("input, textarea")].some((i) => !i.closest(OURS))) continue;
       let first = null;
       const ids = new Set();
       for (const img of d.querySelectorAll("img")) {
@@ -84,14 +80,13 @@
         const m = img.src.match(ID_RE);
         if (!m) continue;
         ids.add(m[1]);
-        if (!first) first = { dialog: d, img, id: m[1] };
+        if (!first && !(img.offsetWidth > 0 && img.offsetWidth < 120)) first = { dialog: d, img, id: m[1] };
       }
-      if (first && ids.size <= 2) return first; // 2 = carta de duas faces
+      if (first && ids.size <= 2) return first;
     }
     return null;
   }
 
-  // Retângulo do "cartão" do zoom (maior ancestral da imagem que não ocupa a tela toda)
   function cardRect(img, dialog) {
     let best = img.getBoundingClientRect();
     for (let e = img.parentElement; e && e !== dialog; e = e.parentElement) {
@@ -102,9 +97,7 @@
     return best;
   }
 
-  // ---------------- Isolamento de eventos ----------------
   function isolate(el) {
-    // Impede que cliques/teclas cheguem ao jogo (atalhos, fechar o zoom, arrastar etc.)
     for (const t of ["keydown", "keyup", "keypress", "mousedown", "mouseup", "pointerdown", "pointerup",
                      "click", "dblclick", "wheel", "contextmenu", "touchstart", "touchend"]) {
       el.addEventListener(t, (e) => e.stopPropagation());
@@ -117,12 +110,10 @@
     }, true);
   }
 
-  // ---------------- Construção ----------------
   function build() {
-    // Painel esquerdo: informações da carta (substitui a caixinha em inglês do site)
     side = document.createElement("div");
     side.id = "cch-side";
-    side.className = "cch-root";
+    side.className = "cch-root cch-info";
     side.innerHTML = `<button type="button" class="cch-icon cch-side-close" data-act="dismiss" title="Fechar (Esc)">✕</button>
       <div class="cch-side-body"></div>`;
     sideBody = side.querySelector(".cch-side-body");
@@ -130,15 +121,14 @@
     document.body.appendChild(side);
     isolate(side);
 
-    // Esc fecha os painéis da carta (sem fechar o zoom do site)
     window.addEventListener("keydown", (e) => {
       if (e.key !== "Escape" || mode !== "card") return;
       if (settingsEl && settingsEl.style.display !== "none") return;
+      if (document.querySelector(".cch-tbl.cch-modal-open")) return;
       e.stopImmediatePropagation(); e.preventDefault();
       dismiss();
     }, true);
 
-    // Painel direito: chat com IA
     panel = document.createElement("div");
     panel.id = "cch-panel";
     panel.className = "cch-root";
@@ -175,7 +165,6 @@
     panel.addEventListener("click", onAction);
     modelSel.addEventListener("change", () => chrome.runtime.sendMessage({ type: "setModel", model: modelSel.value }));
 
-    // Botão flutuante: chat geral (sem carta) / reabrir chat no zoom
     fab = document.createElement("button");
     fab.id = "cch-fab";
     fab.title = "Chat de regras (IA)";
@@ -207,7 +196,8 @@
   }
 
   async function loadModels() {
-    const res = await chrome.runtime.sendMessage({ type: "models" });
+    let res = null;
+    try { res = await chrome.runtime.sendMessage({ type: "models" }); } catch (_) {}
     if (!res || !res.ok) {
       modelSel.innerHTML = `<option value="">(erro ao carregar modelos)</option>`;
       return;
@@ -225,11 +215,9 @@
     renderMsgs();
   }
 
-  // ---------------- Posicionamento ----------------
   const attach = (el, host) => { if (el.parentElement !== host) host.appendChild(el); };
   const margin = 12, gap = 16;
 
-  // Chat à direita da carta
   function placeChat(rect) {
     const room = window.innerWidth - rect.right - gap - margin;
     const w = room >= 320 ? Math.min(440, room) : Math.min(400, window.innerWidth - 2 * margin);
@@ -239,7 +227,6 @@
     Object.assign(panel.style, { left: x + "px", top: top + "px", width: w + "px", height: h + "px" });
   }
 
-  // Informações à esquerda da carta, no lugar da caixinha do site
   function placeSide(rect) {
     const sp = document.querySelector(SITE_PANE);
     const spr = sp && sp.getBoundingClientRect();
@@ -247,7 +234,7 @@
     let left = spr && spr.width ? spr.left : margin;
     let w = Math.min(460, right - left);
     if (w < 300) { left = Math.max(margin, right - 340); w = right - left; }
-    if (w < 240) { left = margin; w = Math.min(380, window.innerWidth - 2 * margin); } // tela estreita: sobrepõe
+    if (w < 240) { left = margin; w = Math.min(380, window.innerWidth - 2 * margin); }
     const top = spr && spr.height ? spr.top : Math.max(margin, rect.top);
     Object.assign(side.style, {
       left: left + "px", top: top + "px", width: w + "px", maxHeight: window.innerHeight - top - margin + "px",
@@ -262,7 +249,6 @@
     });
   }
 
-  // ---------------- Modos ----------------
   function setZoomClass(on) { document.documentElement.classList.toggle("cch-zoom", on); }
 
   function hide() {
@@ -289,11 +275,10 @@
 
   function showCard(z) {
     zoom = z;
-    // Dentro do modal: fica acima do fundo escuro e clicar não fecha o zoom
     attach(side, z.dialog);
     attach(panel, z.dialog);
     const rect = cardRect(z.img, z.dialog);
-    placeSide(rect);           // mede a caixinha do site antes de escondê-la
+    placeSide(rect);
     setZoomClass(true);
     side.style.display = "block";
     panel.style.display = panel.dataset.closed ? "none" : "flex";
@@ -303,7 +288,9 @@
     sideBody.innerHTML = '<div class="cch-sub">Carregando…</div>';
     switchChat("card:" + z.id);
     const id = z.id;
-    chrome.runtime.sendMessage({ type: "card", id }, (res) => {
+    window.dispatchEvent(new CustomEvent("cch:zoom", { detail: { id, img: z.img.src } }));
+    const onCard = (res) => {
+      void chrome.runtime.lastError;
       if (currentId !== id) return;
       if (!res || !res.ok) {
         sideBody.innerHTML = '<div class="cch-sub">Não foi possível carregar esta carta.</div>';
@@ -311,11 +298,44 @@
       }
       currentData = res.data;
       renderInfo(res.data);
-      switchChat("card:" + res.data.oracleId); // histórico por carta, mesmo trocando de edição
-    });
+      switchChat("card:" + res.data.oracleId);
+    };
+    try { chrome.runtime.sendMessage({ type: "card", id }, onCard); } catch (_) { onCard(null); }
   }
 
   function renderInfo(data) {
+    sideBody.innerHTML = infoHtml(data);
+    side.scrollTop = 0;
+    hideNativePane();
+  }
+
+  const xpStr = (s) => (s.includes("'") ? `"${s}"` : `'${s}'`);
+  function hideNativePane() {
+    if (mode !== "card" || !currentData) return;
+    for (const f of currentData.faces) {
+      if (!f.name || !f.type_line) continue;
+      const snap = document.evaluate(`//body//*[contains(normalize-space(text()), ${xpStr(f.name)})]`,
+        document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      for (let i = 0; i < snap.snapshotLength; i++) {
+        const el = snap.snapshotItem(i);
+        if (el.closest(OURS) || el.closest(".cch-hidden-native")) continue;
+        let box = el;
+        while (box.parentElement && box.parentElement !== document.body && !box.parentElement.matches('[role="dialog"]') &&
+          !box.parentElement.querySelector('img[src*="card-images"]') && box.parentElement.textContent.length < 1500) {
+          box = box.parentElement;
+        }
+        if (box.querySelector('img[src*="card-images"]') || box.textContent.length > 900) continue;
+        if (!box.textContent.includes(f.type_line.split("—")[0].trim())) continue;
+        let floating = false;
+        for (let a = box, n = 0; a && n < 4 && !floating; a = a.parentElement, n++) {
+          floating = /fixed|absolute/.test(getComputedStyle(a).position);
+        }
+        if (floating) box.classList.add("cch-hidden-native");
+      }
+    }
+  }
+
+  function infoHtml(data) {
     const faces = data.faces
       .map((f) => {
         const kws = keywordsFor(f);
@@ -343,17 +363,14 @@
       ? `<details class="cch-rulings"><summary>Esclarecimentos oficiais (${data.rulingsPt.length})</summary><div class="cch-kws">` +
         data.rulingsPt.map((r) => `<div class="cch-kw cch-ruling">${symbolsHtml(r)}</div>`).join("") + `</div></details>`
       : "";
-    sideBody.innerHTML = faces + rul;
-    side.scrollTop = 0;
+    return faces + rul;
   }
 
-  // Fecha os painéis desta carta. Voltam ao abrir outra carta ou ao reabrir o zoom.
   function dismiss() {
     if (zoom) dismissed = { dialog: zoom.dialog, id: zoom.id };
     hide();
   }
 
-  // ---------------- Chat ----------------
   const EMPTY = "O modelo não retornou texto (alguns modelos gratuitos gastam tudo \"pensando\"). Tente de novo ou troque de modelo.";
   function stream(messages, model, onDelta, onEnd, onThinking) {
     const port = chrome.runtime.connect({ name: "chat" });
@@ -468,11 +485,10 @@
       });
   }
 
-  // ---------------- Modal de configurações (dentro da página) ----------------
   function openSettings() {
     if (!settingsEl) buildSettings();
     const host = (zoom && zoom.dialog.isConnected && zoom.dialog) || document.body;
-    host.appendChild(settingsEl); // sempre por último = por cima
+    host.appendChild(settingsEl);
     settingsEl.style.display = "flex";
     fillSettings();
   }
@@ -536,7 +552,7 @@
         const r = await chrome.runtime.sendMessage({ type: "testKey", provider: st.provider, key: f("key").value.trim() });
         if (r.ok) {
           m.className = "cch-sub cch-ok"; m.textContent = r.text;
-          if (st.provider === "groq") fetchList(true); // agora dá para listar os modelos
+          if (st.provider === "groq") fetchList(true);
         } else { m.className = "cch-sub cch-err"; m.textContent = "Falhou: " + r.error; }
       }
       if (a === "refresh") fetchList(true);
@@ -555,7 +571,7 @@
       }
     });
     f("provider").addEventListener("change", (e) => {
-      st.keys[st.provider] = f("key").value.trim(); // guarda o que foi digitado antes de trocar
+      st.keys[st.provider] = f("key").value.trim();
       st.provider = e.target.value;
       showProvider();
     });
@@ -563,7 +579,6 @@
     f("free").addEventListener("change", renderModelList);
   }
 
-  // Estado do modal (não salvo até clicar em "Salvar").
   const st = { provider: "openrouter", keys: {}, models: {}, lists: {} };
   const PROV_UI = {
     openrouter: {
@@ -621,7 +636,7 @@
     }
     f("listMsg").textContent = "Carregando modelos…";
     const r = await chrome.runtime.sendMessage({ type: "models", provider: pid, force, key: pid === "groq" ? key : undefined });
-    if (pid !== st.provider) return; // usuário trocou de provedor enquanto carregava
+    if (pid !== st.provider) return;
     if (!r || !r.ok) {
       f("list").innerHTML = "";
       f("listMsg").textContent = "Erro ao carregar: " + (r?.error || "sem resposta");
@@ -656,15 +671,19 @@
     if (msg && msg.type === "openSettings") { if (!panel) build(); openSettings(); }
   });
 
-  // ---------------- Loop de observação ----------------
+  window.CCH = {
+    esc, isolate, infoHtml,
+    host: () => (zoom && zoom.dialog.isConnected ? zoom.dialog : document.body),
+  };
+
   let raf = 0;
   const check = () => {
     raf = 0;
     if (!panel) build();
     let z = findZoom();
-    if (z && dismissed && z.dialog === dismissed.dialog && z.id === dismissed.id) z = null; // usuário fechou
-    else dismissed = null; // zoom fechado ou outra carta: painéis voltam a aparecer
-    if (z) showCard(z);
+    if (z && dismissed && z.dialog === dismissed.dialog && z.id === dismissed.id) z = null;
+    else dismissed = null;
+    if (z) { showCard(z); hideNativePane(); }
     else if (mode === "card") {
       delete panel.dataset.closed;
       freeOpen ? showFree() : hide();
@@ -673,7 +692,6 @@
     if (settingsEl && settingsEl.style.display !== "none" && !settingsEl.isConnected) document.body.appendChild(settingsEl);
   };
   new MutationObserver((muts) => {
-    // ignora mutações feitas pela própria extensão (streaming de texto etc.)
     if (muts.every((m) => m.target.closest && m.target.closest(OURS))) return;
     if (!raf) raf = requestAnimationFrame(check);
   }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["src"] });
